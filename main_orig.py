@@ -57,8 +57,6 @@ def head_word(cmd: str) -> str:
     if m: return f"{m.group(1).upper()}{int(m.group(2))}"
     return hw
 
-# G4 S2.5 -> wait 2.5 s
-# G4 P500 -> wait 500 ms
 def parse_g4_params(cmd: str) -> Optional[float]:
     m = re.match(r"^\s*[Gg]0*4\b([^#;()]*)", cmd)
     if not m: return None
@@ -301,7 +299,7 @@ class MainHandler:
         self.file_location_dir = cfg.default_dir
         self.file_default_name = cfg.default_file
         # Note: very long read timeouts on command/control per your change
-        # self.command = UDSClient(cfg.command_path, 999999, cfg.write_timeout_s, cfg.send_term, cfg.resp_terms)
+        self.command = UDSClient(cfg.command_path, 999999, cfg.write_timeout_s, cfg.send_term, cfg.resp_terms)
         self.control = UDSClient(cfg.control_path, 999999, cfg.write_timeout_s, cfg.send_term, cfg.resp_terms)
         #self.device  = UDSClient(cfg.device_path,  cfg.read_timeout_s, cfg.write_timeout_s, cfg.send_term, cfg.resp_terms)
          # --- Multi-device sockets (numbered) ---
@@ -329,7 +327,7 @@ class MainHandler:
     async def start(self):
         # Keep downstreams alive
         self._maintainers = [
-            # asyncio.create_task(self._maintain_connection("command", self.command)),
+            asyncio.create_task(self._maintain_connection("command", self.command)),
             asyncio.create_task(self._maintain_connection("control", self.control)),
             #asyncio.create_task(self._maintain_connection("device",  self.device)),
         ]
@@ -340,7 +338,7 @@ class MainHandler:
             )
         # Watch events from command & control; ignore INFO; react to ERROR
         self._event_watchers = [
-            # asyncio.create_task(self._event_loop("command", self.command.events)),
+            asyncio.create_task(self._event_loop("command", self.command.events)),
             asyncio.create_task(self._event_loop("control", self.control.events)),
             # If you want device events too, uncomment:
             # asyncio.create_task(self._event_loop("device",  self.device.events)),
@@ -483,10 +481,10 @@ class MainHandler:
             # Abort everything: open the gate and cancel pending (command-side) wait
             self.state = ProgramState.ABORTED
             self._pause_event.set()
-            # try:
-            #     self.command.cancel_pending("aborted by external M2")
-            # except Exception:
-            #     pass
+            try:
+                self.command.cancel_pending("aborted by external M2")
+            except Exception:
+                pass
 
         elif gcode == "M25":
             # Pause (do not cancel pending so M24 can resume)
@@ -510,12 +508,11 @@ class MainHandler:
 
         elif gcode == "M101":
             # Clear pending while PAUSED
-            # if self.state == ProgramState.PAUSED:
-                # try:
-                #     self.command.cancel_pending("cleared by external M101")
-                # except Exception:
-                    # pass
-            pass
+            if self.state == ProgramState.PAUSED:
+                try:
+                    self.command.cancel_pending("cleared by external M101")
+                except Exception:
+                    pass
 
     async def _pauseable_sleep(self, seconds: float) -> bool:
         """Sleep that obeys PAUSE (M25) and ABORT (M2).
@@ -547,10 +544,10 @@ class MainHandler:
         reason = evt.get("error") or evt.get("message") or "downstream_error"
 
         # Cancel any in-flight waits so the awaiting request completes with ERROR immediately
-        # try:
-        #     self.command.cancel_pending(f"{source} error: {reason}")
-        # except Exception:
-        #     pass
+        try:
+            self.command.cancel_pending(f"{source} error: {reason}")
+        except Exception:
+            pass
         try:
             self.control.cancel_pending(f"{source} error: {reason}")
         except Exception:
@@ -651,7 +648,7 @@ class MainHandler:
                 # Abort immediately and cancel any pending command reply (G1/G10/G28/G60)
                 self.state = ProgramState.ABORTED
                 self._pause_event.set()
-                # self.command.cancel_pending("aborted by M2")
+                self.command.cancel_pending("aborted by M2")
 
             elif hw == "M25":
                 # Pause: DO NOT cancel pending waits (so M24 can continue them)
@@ -675,7 +672,7 @@ class MainHandler:
                 # Only valid while PAUSED; cancel any pending command wait
                 if self.state != ProgramState.PAUSED:
                     return j_err("M101 allowed only while PAUSED", gcode="M101", state=self.state.name)
-                # self.command.cancel_pending("cleared by M101")
+                self.command.cancel_pending("cleared by M101")
 
             resp = await self.control.request(cmd)
             return json.dumps(resp, separators=(",",":"))
@@ -712,12 +709,12 @@ class MainHandler:
 
         # Command-side G/M
         if hw in COMMAND_GCODES or hw in COMMAND_MCODES:
-            # resp = await self.command.request(cmd)
+            resp = await self.command.request(cmd)
             return json.dumps(resp, separators=(",",":"))
 
         # Optional: forward other Gxx to command (comment out to strictly allow-list)
         if hw.startswith("G") and re.match(r"^G\d+$", hw):
-            # resp = await self.command.request(cmd)
+            resp = await self.command.request(cmd)
             return json.dumps(resp, separators=(",",":"))
 
         if hw.startswith("M") and re.match(r"^M\d+$", hw):
@@ -773,7 +770,7 @@ class MainHandler:
 
                     # Route per sets
                     if hw in COMMAND_GCODES or hw in COMMAND_MCODES:
-                        # resp = await self.command.request(line)
+                        resp = await self.command.request(line)
                         await self._notify(writer, json.dumps({"event":"line_resp","lineno":lineno,"raw":line,"source":"command","reply":resp,"timestamp":now_iso()}, separators=(",",":")))
                     elif hw in CONTROL_MCODES:
                         resp = await self.control.request(line)
