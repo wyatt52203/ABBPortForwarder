@@ -1,0 +1,54 @@
+paths:
+  #ROBOT related UDS sockets
+  handler_socket: /tmp/handler_socket #main socket where user enters commands
+  command_socket: /tmp/robot_forward_command.sock #G and some M codes go here (G1, M204, M17 etc)
+  control_socket: /tmp/robot_forward_control.sock #Control related M codes go here (M2, M100, M25 etc)
+  #directory for gcode file & file fname
+  # default_dir: /home/n150-ubuntu/teensy_robot_python
+  default_file: test.gcode
+  default_dir: /home/tyson-robot/Documents/PortManagement/
+
+io:
+  read_timeout_s: 5
+  write_timeout_s: 2
+  resp_terminators: ["\0", "\n"]   # order tried when reading
+  send_terminator: "\n"
+
+
+devices:
+  SUCTION:
+    pin: 17
+  AIR:
+    pins: {"1": 13, "2": 13}
+  WATER:
+    modes: {DI: 31, RO: 32}
+
+  # Device related UDS sockets(Arduino SIMPLEPROTOCALSERIAL.ino & device_forwarder.py)
+  sockets:
+    # 1: /tmp/device1_socket
+    # 2: /tmp/device2_socket
+
+  # routing rules
+  routing:
+    SUCTION: 1               # device type → socket id
+    AIR:                      # AIR with indexes
+      by_index:
+        "1": 2               # AIR 1 → socket #2
+        "2": 1               # AIR 2 → socket #1
+      default: 2             # fallback for other AIR indexes
+    WATER:                    # WATER with modes
+      by_mode:
+        DI: 1
+        RO: 1
+      default: 1
+
+
+runfile:
+  # While RUN_FILE is executing, the FSM is RUNNING_FILE.
+  # If PAUSED, transmission halts between lines. If ABORTED, run stops.
+  allow_inline_comments: true      # lines starting with ';' or '#' are skipped
+  strip_inline_comments: true      # remove anything after ';' or ' ( ... ) '
+  skip_blank_lines: true
+
+logging:
+  level: INFO

@@ -1,0 +1,16 @@
+robot:
+  ip: 192.168.15.82
+  control_port: 2002
+  command_port: 2000
+  status_port: 2001
+
+unix:
+  path: /tmp
+
+timeouts:
+  socket: 3.0
+
+timestamps:
+  enabled: true          # whether to inject timestamp
+  mode: local              # utc | local
+  field: "timestamp"    # JSON field name
