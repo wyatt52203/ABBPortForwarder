@@ -3,6 +3,7 @@ paths:
   handler_socket: /tmp/handler_socket #main socket where user enters commands
   command_socket: /tmp/robot_forward_command.sock #G and some M codes go here (G1, M204, M17 etc)
   control_socket: /tmp/robot_forward_control.sock #Control related M codes go here (M2, M100, M25 etc)
+  status_socket: /tmp/robot_forward_status.sock #For M123 status check
   #directory for gcode file & file fname
   # default_dir: /home/n150-ubuntu/teensy_robot_python
   default_file: test.gcode

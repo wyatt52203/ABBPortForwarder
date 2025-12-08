@@ -16,8 +16,29 @@ class ProgramState(Enum):
 
 # ----------------------- Routing sets -----------------------
 COMMAND_GCODES = {"G1", "G10", "G28", "G60", "G29", "G920"}           # → command socket
+STATUS_MCODES = {"M123"} # -> command mcodes
 COMMAND_MCODES = {"M17", "M18", "M203", "M204"}        # → command socket
 CONTROL_MCODES = {"M24", "M25", "M2", "M100", "M101"}  # → control socket
+
+# ----------------------- ABB Translation -----------------------
+
+ABB_HW_CODE = {
+    "M24": "pl!",
+    "M25": "pz!",
+    "M2": "emr",
+    "M100": "rss",
+    "M101": "rsp",
+    "M123": "snd",
+    "G1": "go!"
+}
+
+ABB_PARAM_CODE = {
+    "F": "spd",
+    "A": "acc",
+    "X": "xtg",
+    "Y": "ytg",
+    "Z": "ztg"
+}
 
 # ----------------------- Utilities -----------------------
 def now_iso() -> str:
@@ -72,7 +93,7 @@ def parse_g4_params(cmd: str) -> Optional[float]:
     return None
 
 def parse_json_response(s: str) -> dict:
-    txt = s.strip()
+    txt = s.strip().lstrip('\x00')
     try:
         return json.loads(txt)
     except Exception:
@@ -84,6 +105,25 @@ def parse_json_response(s: str) -> dict:
         if up.startswith("ERROR"):
             return {"status":"ERROR","message":txt,"timestamp":now_iso()}
         return {"status":"ERROR","message":"Non-JSON downstream reply","raw":s,"timestamp":now_iso()}
+    
+def translate_abb_command(cmd: str) -> list[str]:
+    hw = cmd.split()[0].upper()
+
+    if hw not in ABB_HW_CODE:
+        print("Not a valid ABB command")
+        return []
+    
+    if hw in CONTROL_MCODES:
+        return [f"{ABB_HW_CODE[cmd]} 000"]
+
+    abb_commands = []
+    for param in cmd.split()[1:]:
+        letter = param[0].upper()
+        nums = param[1:]
+        abb_commands.append(f"{ABB_PARAM_CODE[letter]} {nums}")
+
+    abb_commands.append(f"{ABB_HW_CODE[hw]} 000")
+    return abb_commands
 
 # ----------------------- Device translation -----------------------
 def _expect(tokens: List[str], i: int) -> Optional[str]:
@@ -211,7 +251,8 @@ class UDSClient:
                 pass
         self._pending = None
 
-    async def _read_until_any(self) -> str:
+    async def _read_until_any(self) -> List[str]:
+        msgs = []
         buf = b""
         while True:
             chunk = await self._reader.read(1024)
@@ -221,32 +262,37 @@ class UDSClient:
             s = buf.decode("utf-8", errors="replace")
             for t in self.resp_terms:
                 if s.endswith(t) or (t in s and s.split(t)[-1] == ""):
-                    return s.rstrip("".join(self.resp_terms))
+                    for msg in s.split(t):
+                        if msg != "":
+                            msgs.append(msg.lstrip('\x00'.join(self.resp_terms)).rstrip("").join(self.resp_terms))
+
+                    return msgs
 
     async def _pump_loop(self):
         try:
             while True:
-                raw = await self._read_until_any()
-                d = parse_json_response(raw)
-                # Route to pending request if present; else treat as event
-                if self._pending is not None and not self._pending.done():
-                    fut = self._pending
-                    self._pending = None
-                    try:
-                        fut.set_result(d)
-                    except Exception:
-                        pass
-                else:
-                    # drop if queue full (avoid backpressure deadlock)
-                    try:
-                        self.events.put_nowait(d)
-                    except asyncio.QueueFull:
+                raws = await self._read_until_any()
+                for raw in raws:
+                    d = parse_json_response(raw)
+                    # Route to pending request if present; else treat as event
+                    if self._pending is not None and not self._pending.done():
+                        fut = self._pending
+                        self._pending = None
                         try:
-                            _ = self.events.get_nowait()
+                            fut.set_result(d)
                         except Exception:
                             pass
-                        with contextlib.suppress(Exception):
+                    else:
+                        # drop if queue full (avoid backpressure deadlock)
+                        try:
                             self.events.put_nowait(d)
+                        except asyncio.QueueFull:
+                            try:
+                                _ = self.events.get_nowait()
+                            except Exception:
+                                pass
+                            with contextlib.suppress(Exception):
+                                self.events.put_nowait(d)
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -255,26 +301,34 @@ class UDSClient:
                 self._pending.set_result({"status":"ERROR","message":f"Pump error: {e}","timestamp":now_iso(),"port":self.path})
             await self.close()
 
-    async def request(self, payload: str) -> dict:
-        async with self._lock:
-            try:
-                await self.ensure_connected()
-                # create a future to capture the next message as our reply
-                loop = asyncio.get_event_loop()
-                self._pending = loop.create_future()
-                self._writer.write((payload + self.send_term).encode())
-                await asyncio.wait_for(self._writer.drain(), timeout=self.write_timeout)
-                # wait for reply delivered by pump
-                reply = await asyncio.wait_for(self._pending, timeout=self.read_timeout)
-                return reply
-            except Exception as e:
-                await self.close()
-                return {"status":"ERROR","message":f"{type(e).__name__}: {e}","timestamp":now_iso(),"port":self.path}
-            finally:
-                # safety: clear pending if still set
-                if self._pending is not None and not self._pending.done():
-                    self._pending.cancel()
-                self._pending = None
+    async def request(self, payload: str, translate_abb: bool = True) -> dict:
+        if translate_abb:
+            payloads = translate_abb_command(payload)
+        else:
+            payloads = [payload]
+        
+        for load in payloads:
+            async with self._lock:
+                try:
+                    await self.ensure_connected()
+                    # create a future to capture the next message as our reply
+                    loop = asyncio.get_event_loop()
+                    self._pending = loop.create_future()
+                    self._writer.write((load + self.send_term).encode())
+                    await asyncio.wait_for(self._writer.drain(), timeout=self.write_timeout)
+                    # wait for reply delivered by pump
+                    reply = await asyncio.wait_for(self._pending, timeout=self.read_timeout)
+                    if load == payloads[-1]:
+                        return reply
+                    
+                except Exception as e:
+                    await self.close()
+                    return {"status":"ERROR","message":f"{type(e).__name__}: {e}","timestamp":now_iso(),"port":self.path}
+                finally:
+                    # safety: clear pending if still set
+                    if self._pending is not None and not self._pending.done():
+                        self._pending.cancel()
+                    self._pending = None
 
 # ----------------------- Handler Server -----------------------
 @dataclass
@@ -282,6 +336,7 @@ class Config:
     handler_path: str
     command_path: str
     control_path: str
+    status_path: str
     device_path: str
     default_dir: str
     default_file: str
@@ -301,8 +356,9 @@ class MainHandler:
         self.file_location_dir = cfg.default_dir
         self.file_default_name = cfg.default_file
         # Note: very long read timeouts on command/control per your change
-        # self.command = UDSClient(cfg.command_path, 999999, cfg.write_timeout_s, cfg.send_term, cfg.resp_terms)
+        self.command = UDSClient(cfg.command_path, 999999, cfg.write_timeout_s, cfg.send_term, cfg.resp_terms)
         self.control = UDSClient(cfg.control_path, 999999, cfg.write_timeout_s, cfg.send_term, cfg.resp_terms)
+        self.status = UDSClient(cfg.status_path, 99999, cfg.write_timeout_s, cfg.send_term, cfg.resp_terms)
         #self.device  = UDSClient(cfg.device_path,  cfg.read_timeout_s, cfg.write_timeout_s, cfg.send_term, cfg.resp_terms)
          # --- Multi-device sockets (numbered) ---
         # Build map: socket_id (int) -> UDSClient
@@ -320,6 +376,7 @@ class MainHandler:
                 self.cfg.send_term,
                 self.cfg.resp_terms
             )
+        self._pending_motion = False
         self._runfile_task: Optional[asyncio.Task] = None
         self._pause_event = asyncio.Event(); self._pause_event.set()
         self._maintainers: List[asyncio.Task] = []
@@ -329,8 +386,9 @@ class MainHandler:
     async def start(self):
         # Keep downstreams alive
         self._maintainers = [
-            # asyncio.create_task(self._maintain_connection("command", self.command)),
+            asyncio.create_task(self._maintain_connection("command", self.command)),
             asyncio.create_task(self._maintain_connection("control", self.control)),
+            asyncio.create_task(self._maintain_connection("status", self.status)),
             #asyncio.create_task(self._maintain_connection("device",  self.device)),
         ]
                 # NEW: maintain each numbered device socket
@@ -340,8 +398,9 @@ class MainHandler:
             )
         # Watch events from command & control; ignore INFO; react to ERROR
         self._event_watchers = [
-            # asyncio.create_task(self._event_loop("command", self.command.events)),
+            asyncio.create_task(self._event_loop("command", self.command.events)),
             asyncio.create_task(self._event_loop("control", self.control.events)),
+            asyncio.create_task(self._event_loop("status", self.status.events)),
             # If you want device events too, uncomment:
             # asyncio.create_task(self._event_loop("device",  self.device.events)),
         ]
@@ -465,6 +524,9 @@ class MainHandler:
                     ))
                     continue
 
+                if source == "command" and evt.get("complete", False):
+                    self._pending_motion = False
+
                 # Otherwise (OKAY/FAULT/etc.), just pass through as an event
                 await self._broadcast(json.dumps(
                     {"event":"downstream_event","source":source,"reply":evt,"timestamp":now_iso()},
@@ -483,16 +545,18 @@ class MainHandler:
             # Abort everything: open the gate and cancel pending (command-side) wait
             self.state = ProgramState.ABORTED
             self._pause_event.set()
-            # try:
-            #     self.command.cancel_pending("aborted by external M2")
-            # except Exception:
-            #     pass
+            self._pending_motion = False
+            try:
+                self.command.cancel_pending("aborted by external M2")
+            except Exception:
+                pass
 
         elif gcode == "M25":
             # Pause (do not cancel pending so M24 can resume)
             if self.state != ProgramState.ABORTED:
                 self.state = ProgramState.PAUSED
             self._pause_event.clear()
+            self._pending_motion = False
 
         elif gcode == "M24":
             # Resume gate
@@ -501,20 +565,23 @@ class MainHandler:
                               if (self._runfile_task and not self._runfile_task.done())
                               else ProgramState.IDLE)
             self._pause_event.set()
+            self._pending_motion = True
 
         elif gcode == "M100":
             # Clear ABORTED state
             if self.state == ProgramState.ABORTED:
                 self.state = ProgramState.IDLE
                 self._pause_event.set()
+                self._pending_motion = False
 
         elif gcode == "M101":
             # Clear pending while PAUSED
-            # if self.state == ProgramState.PAUSED:
-                # try:
-                #     self.command.cancel_pending("cleared by external M101")
-                # except Exception:
-                    # pass
+            self._pending_motion = False
+            if self.state == ProgramState.PAUSED:
+                try:
+                    self.command.cancel_pending("cleared by external M101")
+                except Exception:
+                    pass
             pass
 
     async def _pauseable_sleep(self, seconds: float) -> bool:
@@ -547,10 +614,10 @@ class MainHandler:
         reason = evt.get("error") or evt.get("message") or "downstream_error"
 
         # Cancel any in-flight waits so the awaiting request completes with ERROR immediately
-        # try:
-        #     self.command.cancel_pending(f"{source} error: {reason}")
-        # except Exception:
-        #     pass
+        try:
+            self.command.cancel_pending(f"{source} error: {reason}")
+        except Exception:
+            pass
         try:
             self.control.cancel_pending(f"{source} error: {reason}")
         except Exception:
@@ -614,7 +681,7 @@ class MainHandler:
 
     # ----------------------- Routing + FSM -----------------------
     async def _handle_command(self, raw: str, writer: Optional[asyncio.StreamWriter]=None) -> Optional[str]:
-        cmd = raw.strip()
+        cmd = raw.strip().upper()
         if not cmd:
             return j_err("Empty command")
 
@@ -647,37 +714,42 @@ class MainHandler:
 
         # Control M-codes
         if hw in CONTROL_MCODES:
-            if hw == "M2":
-                # Abort immediately and cancel any pending command reply (G1/G10/G28/G60)
-                self.state = ProgramState.ABORTED
-                self._pause_event.set()
-                # self.command.cancel_pending("aborted by M2")
+            self._apply_control_side_effects(hw)
+            # if hw == "M2":
+            #     # Abort immediately and cancel any pending command reply (G1/G10/G28/G60)
+            #     self.state = ProgramState.ABORTED
+            #     self._pause_event.set()
+            #     self.command.cancel_pending("aborted by M2")
 
-            elif hw == "M25":
-                # Pause: DO NOT cancel pending waits (so M24 can continue them)
-                if self.state != ProgramState.ABORTED:
-                    self.state = ProgramState.PAUSED
-                self._pause_event.clear()
+            # elif hw == "M25":
+            #     # Pause: DO NOT cancel pending waits (so M24 can continue them)
+            #     if self.state != ProgramState.ABORTED:
+            #         self.state = ProgramState.PAUSED
+            #     self._pause_event.clear()
 
-            elif hw == "M24":
-                # Resume: reopen gate; pending command (if any) may complete
-                if self.state != ProgramState.ABORTED:
-                    self.state = ProgramState.RUNNING_FILE if (self._runfile_task and not self._runfile_task.done()) else ProgramState.IDLE
-                self._pause_event.set()
+            # elif hw == "M24":
+            #     # Resume: reopen gate; pending command (if any) may complete
+            #     if self.state != ProgramState.ABORTED:
+            #         self.state = ProgramState.RUNNING_FILE if (self._runfile_task and not self._runfile_task.done()) else ProgramState.IDLE
+            #     self._pause_event.set()
 
-            elif hw == "M100":
-                # Clear ABORTED -> IDLE
-                if self.state == ProgramState.ABORTED:
-                    self.state = ProgramState.IDLE
-                    self._pause_event.set()
+            # elif hw == "M100":
+            #     # Clear ABORTED -> IDLE
+            #     if self.state == ProgramState.ABORTED:
+            #         self.state = ProgramState.IDLE
+            #         self._pause_event.set()
 
-            elif hw == "M101":
-                # Only valid while PAUSED; cancel any pending command wait
-                if self.state != ProgramState.PAUSED:
-                    return j_err("M101 allowed only while PAUSED", gcode="M101", state=self.state.name)
-                # self.command.cancel_pending("cleared by M101")
+            # elif hw == "M101":
+            #     # Only valid while PAUSED; cancel any pending command wait
+            #     if self.state != ProgramState.PAUSED:
+            #         return j_err("M101 allowed only while PAUSED", gcode="M101", state=self.state.name)
+            #     self.command.cancel_pending("cleared by M101")
 
             resp = await self.control.request(cmd)
+            return json.dumps(resp, separators=(",",":"))
+
+        if hw in STATUS_MCODES:
+            resp = await self.status.request(cmd)
             return json.dumps(resp, separators=(",",":"))
 
         # Device commands → translate to PIN and forward (multi-socket routing)
@@ -712,16 +784,23 @@ class MainHandler:
 
         # Command-side G/M
         if hw in COMMAND_GCODES or hw in COMMAND_MCODES:
-            # resp = await self.command.request(cmd)
+            if not self._pending_motion:
+                self._pending_motion = True
+                resp = await self.command.request(cmd)
+            elif self.state == ProgramState.PAUSED:
+                return j_err(f"Unable to complete {cmd} while paused")
+            else:
+                return j_err(f"Unable to complete {cmd} while motion is pending")
+            
             return json.dumps(resp, separators=(",",":"))
 
         # Optional: forward other Gxx to command (comment out to strictly allow-list)
-        if hw.startswith("G") and re.match(r"^G\d+$", hw):
-            # resp = await self.command.request(cmd)
-            return json.dumps(resp, separators=(",",":"))
+        # if hw.startswith("G") and re.match(r"^G\d+$", hw):
+        #     resp = await self.command.request(cmd)
+        #     return json.dumps(resp, separators=(",",":"))
 
-        if hw.startswith("M") and re.match(r"^M\d+$", hw):
-            return j_err("Unknown/unsupported M-code for this handler", gcode=hw)
+        # if hw.startswith("M") and re.match(r"^M\d+$", hw):
+        #     return j_err("Unknown/unsupported M-code for this handler", gcode=hw)
 
         return j_err("Unknown command category")
     def _pick_device_client(self, socket_index: int) -> Optional[UDSClient]:
@@ -773,11 +852,15 @@ class MainHandler:
 
                     # Route per sets
                     if hw in COMMAND_GCODES or hw in COMMAND_MCODES:
-                        # resp = await self.command.request(line)
+                        self._pending_motion = True
+                        resp = await self.command.request(line)
                         await self._notify(writer, json.dumps({"event":"line_resp","lineno":lineno,"raw":line,"source":"command","reply":resp,"timestamp":now_iso()}, separators=(",",":")))
                     elif hw in CONTROL_MCODES:
                         resp = await self.control.request(line)
                         await self._notify(writer, json.dumps({"event":"line_resp","lineno":lineno,"raw":line,"source":"control","reply":resp,"timestamp":now_iso()}, separators=(",",":")))
+                    elif hw in STATUS_MCODES:
+                        resp = await self.status.request(line)
+                        await self._notify(writer, json.dumps({"event":"line_resp","lineno":lineno,"raw":line,"source":"status","reply":resp,"timestamp":now_iso()}, separators=(",",":")))
                     elif self._is_device_command(hw):
                         payload, meta_or_err = translate_device_command(self.cfg.devices, line)
                         if payload is None:
@@ -839,6 +922,8 @@ class MainHandler:
                     st = str(resp_obj.get("status","")).upper()
                     if st == "OKAY":
                         await self._notify(writer, j_ok(event="line_done", lineno=lineno))
+                        while self._pending_motion:
+                            await asyncio.sleep(0.1)
                         continue
                     elif st in ("FAULT","ERROR"):
                         await self._notify(writer, json.dumps({"status":st,"event":"runfile_stop","lineno":lineno,"reply":resp_obj,"timestamp":now_iso()}, separators=(",",":")))
@@ -863,22 +948,6 @@ class MainHandler:
             print(payload)
 
 # ----------------------- Loader & Main -----------------------
-@dataclass
-class Config:
-    handler_path: str
-    command_path: str
-    control_path: str
-    device_path: str
-    default_dir: str
-    default_file: str
-    read_timeout_s: float
-    write_timeout_s: float
-    resp_terms: List[str]
-    send_term: str
-    devices: Dict[str, Any]
-    runfile: dict
-    reconnect_min_ms: int = 250
-    reconnect_max_ms: int = 5000
 
 def load_config(path: str) -> Config:
     with open(path, "r") as f:
@@ -895,6 +964,7 @@ def load_config(path: str) -> Config:
         handler_path = paths.get("handler_socket", "/tmp/handler_socket"),
         command_path = paths.get("command_socket", "/tmp/command_socket"),
         control_path = paths.get("control_socket", "/tmp/control_socket"),
+        status_path = paths.get("status_socket", "/tmp/status_socket"),
         device_path  = paths.get("device_socket",  "/tmp/device_socket"),
         default_dir  = paths.get("default_dir", "/opt/jobs"),
         default_file = paths.get("default_file", "job.gcode"),

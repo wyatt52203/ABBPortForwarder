@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# control_forwarder_fsm.py — ControlPort with explicit TCP & UDS FSMs,
+# command_forwarder.py — CommandPort with explicit TCP & UDS FSMs,
 # state transition broadcasts, reconnect/keepalive/heartbeat, and de-dup.
 
 import socket
@@ -30,8 +30,8 @@ class UdsState(Enum):
     ERROR = auto()
     CLOSED = auto()
 
-# ----------------- ControlPort -----------------
-class ControlPort:
+# ----------------- CommandPort -----------------
+class CommandPort:
     def __init__(self, config_path: str, port_name: str):
         self.config_path = config_path
         self.port_name = port_name.lower()
@@ -512,5 +512,5 @@ class ControlPort:
 
 
 if __name__ == "__main__":
-    cp = ControlPort("config.yaml", "control")
+    cp = CommandPort("config.yaml", "command")
     cp.run()
