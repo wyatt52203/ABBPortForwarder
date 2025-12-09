@@ -29,7 +29,8 @@ ABB_HW_CODE = {
     "M100": "rss",
     "M101": "rsp",
     "M123": "snd",
-    "G1": "go!"
+    "G1": "go!",
+    "G28": "G1 X300 Y-450 Z700"
 }
 
 ABB_PARAM_CODE = {
@@ -115,6 +116,11 @@ def translate_abb_command(cmd: str) -> list[str]:
     
     if hw in CONTROL_MCODES:
         return [f"{ABB_HW_CODE[cmd]} 000"]
+
+    if hw == "G28":
+        params = " " + " ".join(cmd.split()[1:]) if len(cmd.split()) > 1 else ""
+        cmd = ABB_HW_CODE[hw] + params
+        hw = cmd.split()[0].upper()
 
     abb_commands = []
     for param in cmd.split()[1:]:
@@ -330,6 +336,19 @@ class UDSClient:
                         self._pending.cancel()
                     self._pending = None
 
+    # async def send_only(self, payload: str) -> dict:
+    #     async with self._lock:
+    #         try:
+    #             await self.ensure_connected()
+    #             self._writer.write((payload + self.send_term).encode())
+    #             await asyncio.wait_for(self._writer.drain(), timeout=self.write_timeout)
+    #             return True
+                
+    #         except Exception as e:
+    #             await self.close()
+    #             return False
+
+
 # ----------------------- Handler Server -----------------------
 @dataclass
 class Config:
@@ -526,6 +545,25 @@ class MainHandler:
 
                 if source == "command" and evt.get("complete", False):
                     self._pending_motion = False
+
+                # if evt.get("request_ack", False):
+                #     await asyncio.sleep(0.1)
+                #     if source == "status":
+                #         successful_acknowledgment = await self.status.request("ack", translate_abb=False)
+                #     elif source == "control":
+                #         successful_acknowledgment = await self.control.request("ack", translate_abb=False)
+                #     elif source == "command":
+                #         successful_acknowledgment = await self.command.request("ack", translate_abb=False)
+                    
+                #     print("ack:")
+                #     print(successful_acknowledgment)
+
+                #     if not successful_acknowledgment:
+                #         await self._on_downstream_error(source, evt)
+                #         await self._broadcast(json.dumps(
+                #             {"event":"Failed to send acknowledgment message","source":source,"reply":evt,"timestamp":now_iso()},
+                #             separators=(",",":")
+                #         ))
 
                 # Otherwise (OKAY/FAULT/etc.), just pass through as an event
                 await self._broadcast(json.dumps(
@@ -856,6 +894,7 @@ class MainHandler:
                         resp = await self.command.request(line)
                         await self._notify(writer, json.dumps({"event":"line_resp","lineno":lineno,"raw":line,"source":"command","reply":resp,"timestamp":now_iso()}, separators=(",",":")))
                     elif hw in CONTROL_MCODES:
+                        self._apply_control_side_effects(hw)
                         resp = await self.control.request(line)
                         await self._notify(writer, json.dumps({"event":"line_resp","lineno":lineno,"raw":line,"source":"control","reply":resp,"timestamp":now_iso()}, separators=(",",":")))
                     elif hw in STATUS_MCODES:
