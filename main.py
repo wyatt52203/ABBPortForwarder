@@ -36,6 +36,8 @@ ABB_HW_CODE = {
 ABB_PARAM_CODE = {
     "F": "spd",
     "A": "acc",
+    "D": "dac",
+    "J": "jrk",
     "X": "xtg",
     "Y": "ytg",
     "Z": "ztg"

@@ -11,7 +11,7 @@ timeouts:
   socket: 3.0
   heartbeat:
     enabled: true
-    payload: "xxx 000"
+    payload: "snd 000"
 
 timestamps:
   enabled: true          # whether to inject timestamp
