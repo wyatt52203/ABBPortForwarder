@@ -619,13 +619,16 @@ class MainHandler:
 
         elif gcode == "M101":
             # Clear pending while PAUSED
-            self._pending_motion = False
             if self.state == ProgramState.PAUSED:
+                self.state = ProgramState.IDLE
+                self._pending_motion = False
+
                 try:
                     self.command.cancel_pending("cleared by external M101")
                 except Exception:
                     pass
-            pass
+
+                self._pause_event.set()
 
     async def _pauseable_sleep(self, seconds: float) -> bool:
         """Sleep that obeys PAUSE (M25) and ABORT (M2).
