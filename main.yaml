@@ -7,7 +7,7 @@ paths:
   #directory for gcode file & file fname
   # default_dir: /home/n150-ubuntu/teensy_robot_python
   default_file: test.gcode
-  default_dir: /home/tyson-robot/Documents/PortManagement/
+  default_dir: /home/nodered2/ABBPortForwarder
 
 io:
   read_timeout_s: 5
