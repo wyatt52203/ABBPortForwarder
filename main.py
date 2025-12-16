@@ -727,7 +727,7 @@ class MainHandler:
 
     # ----------------------- Routing + FSM -----------------------
     async def _handle_command(self, raw: str, writer: Optional[asyncio.StreamWriter]=None) -> Optional[str]:
-        cmd = raw.strip().upper()
+        cmd = raw.strip()
         if not cmd:
             return j_err("Empty command")
 
@@ -756,7 +756,7 @@ class MainHandler:
             self._runfile_task = asyncio.create_task(self._run_file(full, writer))
             return None
 
-        hw = head_word(cmd)
+        hw = head_word(cmd).upper()
 
         # Control M-codes
         if hw in CONTROL_MCODES:
