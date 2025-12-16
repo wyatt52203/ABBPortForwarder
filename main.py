@@ -601,11 +601,13 @@ class MainHandler:
         elif gcode == "M24":
             # Resume gate
             if self.state != ProgramState.ABORTED:
-                self.state = (ProgramState.RUNNING_FILE
-                              if (self._runfile_task and not self._runfile_task.done())
-                              else ProgramState.IDLE)
+                if (self._runfile_task and not self._runfile_task.done()):
+                    self.state = ProgramState.RUNNING_FILE              
+                    self._pending_motion = True
+                else:
+                    self.state = ProgramState.IDLE
+                
             self._pause_event.set()
-            self._pending_motion = True
 
         elif gcode == "M100":
             # Clear ABORTED state
