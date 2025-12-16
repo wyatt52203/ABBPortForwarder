@@ -101,7 +101,7 @@ class StatusPort:
 
         # Application heartbeat
         self.hb_enabled = bool(hb_cfg.get("enabled", False))
-        self.hb_interval_s = float(hb_cfg.get("interval_s", 5.0))
+        self.hb_interval_s = float(hb_cfg.get("interval_s", 1.0))
         self.hb_payload = str(hb_cfg.get("payload", "\n"))
 
         # Timestamp injection
