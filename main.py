@@ -606,6 +606,7 @@ class MainHandler:
                     self._pending_motion = True
                 else:
                     self.state = ProgramState.IDLE
+                    self._pending_motion = False
                 
             self._pause_event.set()
 
@@ -826,11 +827,11 @@ class MainHandler:
 
         # Command-side G/M
         if hw in COMMAND_GCODES or hw in COMMAND_MCODES:
-            if not self._pending_motion:
+            if self.state == ProgramState.PAUSED:
+                return j_err(f"Unable to complete {cmd} while paused")
+            elif not self._pending_motion:
                 self._pending_motion = True
                 resp = await self.command.request(cmd)
-            elif self.state == ProgramState.PAUSED:
-                return j_err(f"Unable to complete {cmd} while paused")
             else:
                 return j_err(f"Unable to complete {cmd} while motion is pending")
             
