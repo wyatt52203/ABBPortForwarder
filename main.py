@@ -630,6 +630,13 @@ class MainHandler:
 
                 self._pause_event.set()
 
+                if self._runfile_task is not None and not self._runfile_task.done():
+                    try:
+                        self._runfile_task.set_result({"status":"INFO","message":"Cancelled Runfile Due to M101","timestamp":now_iso()})
+                    except Exception:
+                        pass
+                self._runfile_task = None
+
     async def _pauseable_sleep(self, seconds: float) -> bool:
         """Sleep that obeys PAUSE (M25) and ABORT (M2).
            Returns True if completed fully; False if aborted."""
