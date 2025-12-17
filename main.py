@@ -596,17 +596,14 @@ class MainHandler:
             if self.state != ProgramState.ABORTED:
                 self.state = ProgramState.PAUSED
             self._pause_event.clear()
-            self._pending_motion = False
 
         elif gcode == "M24":
             # Resume gate
             if self.state != ProgramState.ABORTED:
                 if (self._runfile_task and not self._runfile_task.done()):
                     self.state = ProgramState.RUNNING_FILE              
-                    self._pending_motion = True
                 else:
                     self.state = ProgramState.IDLE
-                    self._pending_motion = False
                 
             self._pause_event.set()
 
@@ -630,12 +627,12 @@ class MainHandler:
 
                 self._pause_event.set()
 
-                if self._runfile_task is not None and not self._runfile_task.done():
-                    try:
-                        self._runfile_task.set_result({"status":"INFO","message":"Cancelled Runfile Due to M101","timestamp":now_iso()})
-                    except Exception:
-                        pass
-                self._runfile_task = None
+                # if self._runfile_task is not None and not self._runfile_task.done():
+                #     try:
+                #         self._runfile_task.set_result({"status":"INFO","message":"Cancelled Runfile Due to M101","timestamp":now_iso()})
+                #     except Exception:
+                #         pass
+                # self._runfile_task = None
 
     async def _pauseable_sleep(self, seconds: float) -> bool:
         """Sleep that obeys PAUSE (M25) and ABORT (M2).
@@ -681,6 +678,7 @@ class MainHandler:
             # mark state aborted and open the gate; current awaited request will resolve to ERROR and the loop will stop
             self.state = ProgramState.ABORTED
             self._pause_event.set()
+            self._pending_motion = False
 
     async def _broadcast(self, payload: str):
         term = self.cfg.send_term or "\n"
@@ -839,11 +837,15 @@ class MainHandler:
         if hw in COMMAND_GCODES or hw in COMMAND_MCODES:
             if self.state == ProgramState.PAUSED:
                 return j_err(f"Unable to complete {cmd} while paused")
-            elif not self._pending_motion:
+            elif self.state == ProgramState.RUNNING_FILE:
+                return j_err("Already running a file")
+            elif self.state == ProgramState.ABORTED:
+                return j_err("Program is ABORTED (use M100 to clear)")
+            elif self._pending_motion:
+                return j_err(f"Unable to complete {cmd} while motion is pending")
+            else:
                 self._pending_motion = True
                 resp = await self.command.request(cmd)
-            else:
-                return j_err(f"Unable to complete {cmd} while motion is pending")
             
             return json.dumps(resp, separators=(",",":"))
 
@@ -875,9 +877,13 @@ class MainHandler:
                 for lineno, raw in enumerate(f, start=1):
                     if self.state == ProgramState.ABORTED:
                         await self._notify(writer, j_err("Aborted", event="runfile_abort")); break
+                    if self.state == ProgramState.IDLE:
+                        await self._notify(writer, j_err("Canceled File with M101", event="runfile_cancel")); break
                     await self._pause_event.wait()
                     if self.state == ProgramState.ABORTED:
                         await self._notify(writer, j_err("Aborted", event="runfile_abort")); break
+                    if self.state == ProgramState.IDLE:
+                        await self._notify(writer, j_err("Canceled File with M101", event="runfile_cancel")); break
 
                     line = raw.strip()
                     if is_blank_or_comment(line, {"runfile": self.cfg.runfile}): continue
