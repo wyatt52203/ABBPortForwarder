@@ -620,6 +620,7 @@ class MainHandler:
                 self.state = ProgramState.IDLE
                 self._pending_motion = False
                 self._pause_event.set()
+                print(f"pending m: {self._pending_motion}")
 
                 try:
                     self.command.cancel_pending("cleared by external M101")
@@ -881,7 +882,9 @@ class MainHandler:
                         await self._notify(writer, j_err("Aborted", event="runfile_abort")); break
                     if self.state == ProgramState.IDLE:
                         await self._notify(writer, j_err("Canceled File with M101", event="runfile_cancel")); break
+                    
                     await self._pause_event.wait()
+
                     if self.state == ProgramState.ABORTED:
                         await self._notify(writer, j_err("Aborted", event="runfile_abort")); break
                     if self.state == ProgramState.IDLE:
@@ -891,6 +894,11 @@ class MainHandler:
                         print('hi')
                         print(lineno)
                         await asyncio.sleep(0.1)
+
+                    if self.state == ProgramState.ABORTED:
+                        await self._notify(writer, j_err("Aborted", event="runfile_abort")); break
+                    if self.state == ProgramState.IDLE:
+                        await self._notify(writer, j_err("Canceled File with M101", event="runfile_cancel")); break
 
                     line = raw.strip()
                     if is_blank_or_comment(line, {"runfile": self.cfg.runfile}): continue
