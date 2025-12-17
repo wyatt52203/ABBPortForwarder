@@ -884,6 +884,9 @@ class MainHandler:
                         await self._notify(writer, j_err("Aborted", event="runfile_abort")); break
                     if self.state == ProgramState.IDLE:
                         await self._notify(writer, j_err("Canceled File with M101", event="runfile_cancel")); break
+                    
+                    while self._pending_motion:
+                        await asyncio.sleep(0.1)
 
                     line = raw.strip()
                     if is_blank_or_comment(line, {"runfile": self.cfg.runfile}): continue
@@ -982,8 +985,6 @@ class MainHandler:
                     st = str(resp_obj.get("status","")).upper()
                     if st == "OKAY":
                         await self._notify(writer, j_ok(event="line_done", lineno=lineno))
-                        while self._pending_motion:
-                            await asyncio.sleep(0.1)
                         continue
                     elif st in ("FAULT","ERROR"):
                         await self._notify(writer, json.dumps({"status":st,"event":"runfile_stop","lineno":lineno,"reply":resp_obj,"timestamp":now_iso()}, separators=(",",":")))
