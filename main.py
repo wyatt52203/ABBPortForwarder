@@ -889,6 +889,7 @@ class MainHandler:
                     
                     while self._pending_motion:
                         print('hi')
+                        print(lineno)
                         await asyncio.sleep(0.1)
 
                     line = raw.strip()
