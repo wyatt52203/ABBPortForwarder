@@ -619,13 +619,13 @@ class MainHandler:
             if self.state == ProgramState.PAUSED:
                 self.state = ProgramState.IDLE
                 self._pending_motion = False
+                self._pause_event.set()
 
                 try:
                     self.command.cancel_pending("cleared by external M101")
                 except Exception:
                     pass
 
-                self._pause_event.set()
 
                 # if self._runfile_task is not None and not self._runfile_task.done():
                 #     try:
@@ -756,6 +756,8 @@ class MainHandler:
                 return j_err("Already running a file")
             if self.state == ProgramState.ABORTED:
                 return j_err("Program is ABORTED (use M100 to clear)")
+            if self.state == ProgramState.PAUSED:
+                return j_err("Program is PAUSED")
 
             if writer: await self._write_line(writer, j_ok(message="RUN_FILE started", file=full))
             self._runfile_task = asyncio.create_task(self._run_file(full, writer))
