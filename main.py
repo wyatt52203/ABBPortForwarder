@@ -888,6 +888,7 @@ class MainHandler:
                         await self._notify(writer, j_err("Canceled File with M101", event="runfile_cancel")); break
                     
                     while self._pending_motion:
+                        print('hi')
                         await asyncio.sleep(0.1)
 
                     line = raw.strip()
