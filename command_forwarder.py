@@ -12,6 +12,11 @@ import hashlib
 from enum import Enum, auto
 from datetime import datetime
 from typing import Set, Optional
+import argparse
+
+# ----------------------- CFG Parser -----------------------
+parser = argparse.ArgumentParser(description="TCP Foorwarder for GCode Execution")
+parser.add_argument("--cfg", default="config.yaml", type=str, help="Forwarder config file name. Defaults to config.yaml")
 
 # ----------------- FSM enums -----------------
 class TcpState(Enum):
@@ -78,12 +83,16 @@ class CommandPort:
             raise KeyError(f"Robot config missing key '{port_key}'")
         self.robot_port = robot_cfg[port_key]
 
-        base_path = unix_cfg.get("path", "/tmp")
-        if os.path.isdir(base_path):
-            self.unix_socket_path = os.path.join(base_path, f"robot_forward_{self.port_name}.sock")
-        else:
-            root, ext = os.path.splitext(base_path)
-            self.unix_socket_path = f"{root}_{self.port_name}{ext}"
+        paths = cfg.get("paths", {})
+        self.unix_socket_path = paths.get(f"{self.port_name}_socket", "")
+
+        if self.unix_socket_path == "":
+            base_path = unix_cfg.get("path", "/tmp")
+            if os.path.isdir(base_path):
+                self.unix_socket_path = os.path.join(base_path, f"robot_forward_{self.port_name}.sock")
+            else:
+                root, ext = os.path.splitext(base_path)
+                self.unix_socket_path = f"{root}_{self.port_name}{ext}"
 
         # TCP timeouts / reconnect
         self.sock_timeout = float(timeouts_cfg.get("socket", 3.0))
@@ -512,5 +521,6 @@ class CommandPort:
 
 
 if __name__ == "__main__":
-    cp = CommandPort("config.yaml", "command")
+    args = parser.parse_args()
+    cp = CommandPort(args.cfg, "command")
     cp.run()

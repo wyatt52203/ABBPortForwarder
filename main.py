@@ -6,6 +6,11 @@ import asyncio, os, sys, re, yaml, time, json, contextlib
 from enum import Enum, auto
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple, Set
+import argparse
+
+# ----------------------- CFG Parser -----------------------
+parser = argparse.ArgumentParser(description="UDS Socket for GCode Execution")
+parser.add_argument("--cfg", default="main.yaml", type=str, help="Main config file name. Defaults to main.yaml")
 
 # ----------------------- FSM -----------------------
 class ProgramState(Enum):
@@ -1049,16 +1054,17 @@ def load_config(path: str) -> Config:
         reconnect_max_ms = reconnect_max_ms
     )
 
-async def amain():
-    cfg_path = os.environ.get("HANDLER_CONFIG", os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.yaml"))
+async def amain(yaml_file):
+    cfg_path = os.environ.get("HANDLER_CONFIG", os.path.join(os.path.dirname(os.path.abspath(__file__)), yaml_file))
     cfg = load_config(cfg_path)
     os.makedirs(os.path.dirname(cfg.handler_path), exist_ok=True)
     handler = MainHandler(cfg)
     await handler.start()
 
 def main():
+    args = parser.parse_args()
     try:
-        asyncio.run(amain())
+        asyncio.run(amain(args.cfg))
     except KeyboardInterrupt:
         pass
     except Exception as e:

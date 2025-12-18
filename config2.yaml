@@ -4,6 +4,12 @@ robot:
   command_port: 2000
   status_port: 2001
 
+paths:
+  #ROBOT related UDS sockets
+  command_socket: /tmp/robot_forward_command2.sock #G and some M codes go here (G1, M204, M17 etc)
+  control_socket: /tmp/robot_forward_control2.sock #Control related M codes go here (M2, M100, M25 etc)
+  status_socket: /tmp/robot_forward_status2.sock #For M123 status check
+
 unix:
   path: /tmp
 
