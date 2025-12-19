@@ -35,7 +35,7 @@ ABB_HW_CODE = {
     "M101": "rsp",
     "M123": "snd",
     "G1": "go!",
-    "G28": "G1 X300 Y-450 Z700"
+    "G28": "G1 X-450 Y700 Z300"
 }
 
 ABB_PARAM_CODE = {
@@ -43,9 +43,9 @@ ABB_PARAM_CODE = {
     "A": "acc",
     "D": "dac",
     "J": "jrk",
-    "X": "xtg",
-    "Y": "ytg",
-    "Z": "ztg"
+    "X": "ytg",
+    "Y": "ztg",
+    "Z": "xtg"
 }
 
 # ----------------------- Utilities -----------------------
